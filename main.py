@@ -1,69 +1,93 @@
 import json
-import sys
+import os
+import pickle
 import traceback
-from ftplib import FTP
-from pathlib import Path
 
 import requests
-from bs4 import BeautifulSoup
-from requests.exceptions import MissingSchema
 from vk_api import VkApi, ApiError, VkUpload
-from vk_api.longpoll import VkLongPoll
+from vk_api.execute import VkFunction
+from vk_api.longpoll import VkLongPoll, VkEventType
 
 
-def parse_remote_folder(url):
-    out = {'/': []}
+def captcha_handler(c):
+    with open('captcha.jpg', 'wb') as file:
+        file.write(requests.get(c.url).content)
+    reply('Enter captcha from "captcha.jpg"')
+    code = input('Enter captcha from "captcha.jpg"\n')
+    return c.try_again(code)
+
+
+reply = lambda m='', a='': api.messages.send(peer_id=event.peer_id, message=m, attachment=a)
+
+vk_send_sticker = VkFunction(args=('message_ids', 'peer_id', 'attachment'),
+                             code='''
+                             API.messages.delete({"message_ids": %(message_ids)s, 
+                                                  "delete_for_all": true});
+                             API.messages.send({"peer_id": %(peer_id)s, "attachment": %(attachment)s});                             
+                             ''')
+
+
+def open_cache():
+    global cache
     try:
-        request = requests.get(url)
-    except MissingSchema:
-        print('Wrong url!')
-        exit()
-    except requests.exceptions.ConnectionError:
-        print('Can\'t connect to remote server!')
-        exit()
-    for tag in BeautifulSoup(request.text, features="html.parser").find_all('a'):
-        if tag.text.endswith('.png'):
-            out['/'].append(tag.text)
-        elif tag.text.endswith('/'):
-            out.update({tag.text[:-1]: parse_remote_folder(url + tag.text[:-1])['/']})
-    return out
+        cache = pickle.load(open('cache.pkl', 'rb'))
+    except FileNotFoundError:
+        pickle.dump({}, open('cache.pkl', 'wb'))
+        cache = pickle.load(open('cache.pkl', 'rb'))
+
+
+def update_cache(d: dict):
+    cache.update(d)
+    pickle.dump(cache, open('cache.pkl', 'wb'))
 
 
 try:
+    stickers = []
+    for path, folders, files in os.walk('stickers'):
+        if path.endswith('/'):
+            path = path[10:]
+        else:
+            path = path[9:]
+        for sticker in files:
+            sticker = sticker[:-4].encode('utf-8').replace(b'\xb8\xcc\x86', b'\xb9').decode('utf-8')
+            if path:
+                stickers.append(f'{path}.{sticker}')
+            else:
+                stickers.append(sticker)
+
     with open('config.json', 'r') as f:
         config = json.load(f)
 
     if config['token']:
-        session = VkApi(token=config['token'], api_version='5.89')
+        session = VkApi(token=config['token'], api_version='5.89',
+                        captcha_handler=captcha_handler)
     else:
-        session = VkApi(login=config['login'], password=config['password'], api_version='5.89')
+        session = VkApi(login=config['login'], password=config['password'],
+                        api_version='5.89', captcha_handler=captcha_handler)
         try:
             session.auth()
         except ApiError:
             print(traceback.format_exc())
-            exit(0)
+            exit()
     api = session.get_api()
 
-    base_stickers_url = sys.argv[1]
-    stickers = []
-    for s in parse_remote_folder(base_stickers_url):
-        for i in parse_remote_folder(base_stickers_url)[s]:
-            stickers.append(f'{s}.{i[:-4]}' if s != '/' else i[:-4])
     if len(stickers) == 0:
         print('No stickers initialized!')
         exit()
-    print(f'Initialized {len(stickers)} stickers')
     lp = VkLongPoll(session)
     up = VkUpload(session)
+    open_cache()
+    print(f'Initialized {len(stickers)} stickers ({len(cache)} cached)')
     for event in lp.listen():
-        if event.from_me and event.text.startswith('!') and event.text.endswith('!') and event.text[1:-1] in stickers:
-            path = Path('stickers/' + event.text[1:-1] + '.png')
-            if not path.exists():
-                with open('stickers/' + event.text[1:-1] + '.png', 'wb') as f:
-                    f.write(requests.get(base_stickers_url + event.text[1:-1].replace('.', '/') + '.png').content)
-
-            sticker = up.graffiti('stickers/' + event.text[1:-1] + '.png', event.peer_id)[0]
-            api.messages.delete(message_ids=event.message_id, delete_for_all=True)
-            api.messages.send(peer_id=event.peer_id, attachment=f'doc{sticker["owner_id"]}_{sticker["id"]}')
+        if event.type == VkEventType.MESSAGE_NEW and \
+                event.from_me and event.text.startswith('!') and event.text.endswith('!') and \
+                event.text[1:-1] in stickers:
+            if event.text[1:-1] in cache:
+                sticker = cache[event.text[1:-1]]
+            else:
+                sticker = up.graffiti('stickers/' + event.text[1:-1].replace('.', '/') + '.png', event.peer_id)[0]
+                sticker = f'doc{sticker["owner_id"]}_{sticker["id"]}'
+                update_cache({event.text[1:-1]: sticker})
+            vk_send_sticker(api, event.message_id, event.peer_id, sticker)
 except KeyboardInterrupt:
     print('Shutting down...')
