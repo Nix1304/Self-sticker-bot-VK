@@ -62,7 +62,7 @@ def main():
         session = VkApi(token=config['token'], api_version='5.89',
                         captcha_handler=captcha_handler)
     else:
-        session = VkApi(login=config['login'], password=config['password'],
+        session = VkApi(login=config['login'], password=config['password'], app_id=2685278, scope='messages,offline',
                         api_version='5.89', captcha_handler=captcha_handler)
         try:
             session.auth()
