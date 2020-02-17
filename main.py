@@ -41,7 +41,7 @@ def update_cache(d: dict):
     pickle.dump(cache, open('cache.pkl', 'wb'))
 
 
-try:
+def main():
     stickers = []
     for path, folders, files in os.walk('stickers'):
         if path.endswith('/'):
@@ -89,5 +89,8 @@ try:
                 sticker = f'doc{sticker["owner_id"]}_{sticker["id"]}'
                 update_cache({event.text[1:-1]: sticker})
             vk_send_sticker(api, event.message_id, event.peer_id, sticker)
+
+try:
+    main()
 except KeyboardInterrupt:
     print('Shutting down...')
