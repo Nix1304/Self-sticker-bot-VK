@@ -85,9 +85,12 @@ def main():
             if event.text[1:-1] in cache:
                 sticker = cache[event.text[1:-1]]
             else:
-                sticker = up.graffiti('stickers/' + event.text[1:-1].replace('.', '/') + '.png', event.peer_id)[0]
-                sticker = f'doc{sticker["owner_id"]}_{sticker["id"]}'
-                update_cache({event.text[1:-1]: sticker})
+                try:
+                    sticker = up.graffiti('stickers/' + event.text[1:-1].replace('.', '/') + '.png', event.peer_id)[0]
+                    sticker = f'doc{sticker["owner_id"]}_{sticker["id"]}'
+                    update_cache({event.text[1:-1]: sticker})
+                except FileNotFoundError:
+                    print('Графити не найдено!')
             vk_send_sticker(api, event.message_id, event.peer_id, sticker)
 
 try:
